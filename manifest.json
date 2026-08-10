@@ -1,0 +1,11 @@
+{
+	"id": "places-radar",
+	"name": "Places - Radar",
+	"version": "0.0.1",
+	"minAppVersion": "1.13.0",
+	"description": "Map provider for Places using Radar, with vector maps, POI search, and directions.",
+	"author": "Bob Stanton",
+	"authorUrl": "https://github.com/bobstanton",
+	"fundingUrl": "https://ko-fi.com/bobsoftware",
+	"isDesktopOnly": false
+}

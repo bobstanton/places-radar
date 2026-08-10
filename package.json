@@ -1,0 +1,39 @@
+{
+  "name": "places-radar",
+  "version": "0.0.1",
+  "description": "Map provider for Places using Radar, with vector maps, POI search, and directions.",
+  "main": "main.js",
+  "scripts": {
+    "lint": "eslint src --ext .ts,.tsx,.js,.jsx",
+    "rename": "node -e \"require('fs').rename('main.css', 'styles.css', () => { })\"",
+    "dev": "node esbuild.config.mjs && npm run rename",
+    "build": "node esbuild.config.mjs production && npm run rename",
+    "typecheck": "tsc --noEmit --pretty false --skipLibCheck",
+    "version": "node version-bump.mjs && git add manifest.json versions.json",
+    "watch": "node esbuild.config.mjs watch"
+  },
+  "keywords": [],
+  "author": "Bob Stanton",
+  "license": "AGPL-3.0-only",
+  "devDependencies": {
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^26.1.1",
+    "@typescript-eslint/eslint-plugin": "^8.63.0",
+    "@typescript-eslint/parser": "^8.63.0",
+    "esbuild": "^0.28.1",
+    "eslint": "^8.57.1",
+    "obsidian": "^1.13.1",
+    "tslib": "2.8.1",
+    "typescript": "6.0.3"
+  },
+  "dependencies": {
+    "@radarlabs/plugin-maps": "^1.1.0",
+    "maplibre-gl": "^5.24.0",
+    "places-maplibre-base": "git+https://github.com/bobstanton/places-maplibre-base.git#0.0.1",
+    "places-shared": "git+https://github.com/bobstanton/places-shared.git#0.0.1",
+    "radar-sdk-js": "^5.1.1"
+  },
+  "overrides": {
+    "typescript": "6.0.3"
+  }
+}
