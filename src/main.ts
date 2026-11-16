@@ -1,22 +1,22 @@
 import { App, Plugin } from "obsidian";
 import { IPlaceExtensionSettings, IPlacesExtensionHostSettings } from "places-shared/settings";
-import { IPlacePluginExtension, IPlacePluginExtensionExports, registerPlaceExtensionLifecycle, settingsOnlyExports, PLACES_EXTENSION_API_VERSION, type ExtensionSettingsGroup } from "places-shared/services";
+import { IPlacePluginExtension, IPlacePluginExtensionExports, registerPlaceExtensionLifecycle, settingsOnlyExports, PLACES_EXTENSION_API_VERSION, type ExtensionSettingsGroup } from "places-shared/obsidian/services";
 import { Utilities, configureRequestLogging } from "places-shared/utils";
-import { apiKeySettingItem, countrySettingItem, styleDropdownItem } from "places-shared/ui";
+import { apiKeySettingItem, countrySettingItem, settingsPageStatus, styleDropdownItem } from "places-shared/obsidian/ui";
 import RadarApiService from "./RadarApiService";
 import { RadarRouteOverlayService } from "./RadarRouteOverlayService";
 import { RadarMapBlockProcessor, RADAR_STYLES } from "./RadarMapBlockProcessor";
-import { buildImageAlignment } from "places-maplibre-base";
+import { RADAR_STYLES as RADAR_STYLE_CATALOG } from "places-radar/core";
+import { buildImageAlignment } from "places-shared/obsidian/maplibre";
 import { PROVIDER_ICON } from "./provider-icon";
 import "@radarlabs/plugin-maps/dist/radar-maps.css";
-import "places-maplibre-base/styles.css";
+import "places-shared/maplibre-styles.css";
 
 const DEFAULT_SETTINGS: IPlaceExtensionSettings = {
   defaultStyle: "radar-default-v1"
 };
 
 export default class RadarPlacePluginExtension extends Plugin implements IPlacePluginExtension {
-
   onload() {
     registerPlaceExtensionLifecycle(this);
   }
@@ -26,7 +26,7 @@ export default class RadarPlacePluginExtension extends Plugin implements IPlaceP
     Utilities.applyDefaults(extensionSettings, DEFAULT_SETTINGS);
 
     if (!extensionSettings.apiKey) {
-      return settingsOnlyExports(this.settingsGroup());
+      return settingsOnlyExports(this.settingsGroup(extensionSettings));
     }
 
     const mapBlockProcessor = new RadarMapBlockProcessor(app, extensionSettings, mainSettings.units, mainSettings.developerMode);
@@ -60,29 +60,24 @@ export default class RadarPlacePluginExtension extends Plugin implements IPlaceP
           imageAlignment
         }
       ],
-      settingsGroup: this.settingsGroup()
+      settingsGroup: this.settingsGroup(extensionSettings)
     };
   }
 
-  private settingsGroup(): ExtensionSettingsGroup {
+  private settingsGroup(settings: IPlaceExtensionSettings): ExtensionSettingsGroup {
     return {
       heading: "Radar",
+      ...settingsPageStatus(() => Boolean(settings.apiKey?.trim())),
+      reloadOn: ["apiKey", "defaultStyle"],
       items: [
         apiKeySettingItem("Radar", "API key for Radar"),
         countrySettingItem("Country to limit searches to (optional)"),
         styleDropdownItem({
           desc: "Default map style for Radar maps. Blocks can also use a custom Maps Studio style id via style:",
-          styles: [
-            { value: "radar-default-v1", name: "Radar Default" },
-            { value: "radar-dark-v1", name: "Radar Dark" },
-            { value: "radar-light-v1", name: "Radar Light" },
-            { value: "radar-satellite-v1", name: "Satellite (Enterprise plan)" },
-            { value: "radar-hybrid-v1", name: "Hybrid (Enterprise plan)" }
-          ],
+          styles: RADAR_STYLE_CATALOG.map(({ value, settingsName }) => ({ value, name: settingsName })),
           fallbackStyle: "radar-default-v1"
         }),
       ],
     };
   }
-
 }

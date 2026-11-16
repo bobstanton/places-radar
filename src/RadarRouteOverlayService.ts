@@ -1,17 +1,18 @@
 import type * as GeoJSON from "geojson";
-import Radar from "radar-sdk-js";
 import { type IPlaceExtensionSettings } from "places-shared/settings";
-import { type DirectionsOverlayRequest, type IsochroneOverlayRequest, type RouteOverlayCapabilities, type RouteOverlayService, addRouteEndpointFeatures, addRouteMetricLabelFeatures, assertProviderApiKey, buildRouteLegMetrics, buildRouteLegProperties, buildRouteWaypointProperties, describeProviderThrownError, formatRouteDistance, formatRouteDuration, formatRouteWaypointName, mapTravelMode } from "places-shared/services";
+import { type DirectionsOverlayRequest, type IsochroneOverlayRequest, type RouteOverlayCapabilities, type RouteOverlayService, type RouteHttpClient, loggedRouteHttpClient, formatProviderApiError, appendDirectionsRouteFeatures, buildDirectionsRouteFeature, assertProviderApiKey, buildRouteLegMetrics, describeProviderThrownError, formatRouteWaypointName, mapTravelMode } from "places-shared/services";
 
 type RadarMode = "car" | "foot" | "bike";
 
 const RADAR_MODES: { walk: RadarMode; bike: RadarMode; drive: RadarMode } = { walk: "foot", bike: "bike", drive: "car" };
 
-// Directions through the official radar-sdk-js. The SDK's distance call
-// returns route geometry between an origin and one destination; multi-waypoint
-// routes are built one leg at a time.
+interface RadarRoute {
+  geometry?: GeoJSON.LineString;
+  legs?: Array<{ distance?: { value?: number }; duration?: { value?: number } }>;
+}
+
 export class RadarRouteOverlayService implements RouteOverlayService {
-  constructor(private extensionSettings: IPlaceExtensionSettings) {}
+  constructor(private extensionSettings: IPlaceExtensionSettings, private http: RouteHttpClient = loggedRouteHttpClient) {}
 
   getProviderName(): string {
     return "radar";
@@ -28,14 +29,17 @@ export class RadarRouteOverlayService implements RouteOverlayService {
 
   async getDirectionsOverlay(request: DirectionsOverlayRequest): Promise<GeoJSON.FeatureCollection> {
     assertProviderApiKey(this.extensionSettings.apiKey, "Radar");
+
     if (request.optimize) {
-      throw new Error("Radar does not offer route optimization.");
+      throw new Error("The Places Radar integration does not support route optimization.");
     }
+
     const features: GeoJSON.Feature[] = [];
     const mode = mapTravelMode(request.mode, RADAR_MODES);
 
     for (let index = 0; index < request.routes.length; index++) {
       const route = request.routes[index];
+
       if (route.length < 2) continue;
 
       const coordinates: number[][] = [];
@@ -43,61 +47,70 @@ export class RadarRouteOverlayService implements RouteOverlayService {
       let durationSeconds = 0;
       const legMetrics: Array<{ distanceMeters: number; durationSeconds: number }> = [];
 
-      for (let leg = 0; leg < route.length - 1; leg++) {
-        const from = route[leg];
-        const to = route[leg + 1];
+      for (let start = 0; start < route.length - 1; start += 24) {
+        const stops = route.slice(start, start + 25);
+        const params = new URLSearchParams({
+          locations: stops.map(stop => `${stop.latitude},${stop.longitude}`).join('|'),
+          mode, units: 'metric', geometry: 'linestring',
+        });
+        let batchRoute: RadarRoute | undefined;
 
-        let legRoute;
         try {
-          const result = await Radar.distance({
-            origin: `${from.latitude},${from.longitude}`,
-            destination: `${to.latitude},${to.longitude}`,
-            modes: [mode],
-            units: "metric",
-            geometry: "linestring",
+          const response = await this.http({
+            url: `https://api.radar.io/v1/route/directions?${String(params)}`,
+            headers: { Authorization: this.extensionSettings.apiKey ?? '' },
           });
-          legRoute = result.routes[mode];
+
+          if (response.status >= 400) {
+            throw new Error(formatProviderApiError({
+              provider: 'Radar', operation: 'directions', status: response.status,
+              json: response.json, text: response.text,
+            }));
+          }
+
+          batchRoute = (response.json as { routes?: RadarRoute[] } | undefined)?.routes?.[0];
         } catch (error) {
-          throw new Error(await describeProviderThrownError({ provider: "Radar", operation: "directions", requestSummary: `leg ${leg + 1}, ${request.mode}`, error }));
+          throw new Error(await describeProviderThrownError({ provider: "Radar", operation: "directions", requestSummary: `${stops.length} stops, ${request.mode}`, error }));
         }
 
-        if (!legRoute?.geometry?.coordinates) {
-          throw new Error(`Radar returned no ${request.mode} route between ${formatRouteWaypointName(from)} and ${formatRouteWaypointName(to)}`);
+        const geometry = batchRoute?.geometry;
+        const legs = batchRoute?.legs;
+
+        if (geometry?.type !== 'LineString' || !Array.isArray(geometry.coordinates) || geometry.coordinates.length < 2
+          || !Array.isArray(legs) || legs.length !== stops.length - 1) {
+          throw new Error(`Radar returned an incomplete ${request.mode} route between ${formatRouteWaypointName(stops[0])} and ${formatRouteWaypointName(stops[stops.length - 1])}`);
         }
 
-        coordinates.push(...legRoute.geometry.coordinates);
-        const legDistanceMeters = legRoute.distance?.value ?? 0;
-        const legDurationSeconds = (legRoute.duration?.value ?? 0) * 60;
-        distanceMeters += legDistanceMeters;
-        durationSeconds += legDurationSeconds;
-        legMetrics.push({ distanceMeters: legDistanceMeters, durationSeconds: legDurationSeconds });
+        const last = coordinates[coordinates.length - 1];
+        const first = geometry.coordinates[0];
+        const overlap = last && last[0] === first[0] && last[1] === first[1] ? 1 : 0;
+
+        for (const position of geometry.coordinates.slice(overlap)) coordinates.push(position);
+
+        for (const leg of legs) {
+          const distance = leg.distance?.value;
+          const duration = leg.duration?.value;
+
+          if (typeof distance !== 'number' || !Number.isFinite(distance) || distance < 0
+            || typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) {
+            throw new Error('Radar returned invalid route leg metrics');
+          }
+
+          distanceMeters += distance;
+          durationSeconds += duration * 60;
+          legMetrics.push({ distanceMeters: distance, durationSeconds: duration * 60 });
+        }
       }
 
       if (coordinates.length === 0) continue;
 
-      const routeFeature: GeoJSON.Feature = {
-        type: "Feature",
-        geometry: { type: "LineString", coordinates },
-        properties: {
-          name: request.name ? `${request.name} ${index + 1}` : `Route ${index + 1}`,
-          provider: "radar",
-          mode: request.mode,
-          optimized: false,
-          route_index: index,
-          ...buildRouteWaypointProperties(route),
-          ...buildRouteLegProperties(buildRouteLegMetrics(route, legMetrics)),
-          distance_meters: distanceMeters,
-          distance_text: formatRouteDistance(distanceMeters),
-          duration_seconds: durationSeconds,
-          duration_text: formatRouteDuration(durationSeconds),
-          stroke: request.style?.color ?? "#2563eb",
-          "stroke-width": request.style?.strokeWidth ?? 5,
-          "stroke-opacity": request.style?.strokeOpacity ?? 0.85,
-        },
-      };
-      features.push(routeFeature);
-      await addRouteEndpointFeatures(features, routeFeature, request.waypointLabelTemplate);
-      await addRouteMetricLabelFeatures(features, routeFeature, request.metricLabels, request.labelTemplate, request.legLabelTemplate);
+      const routeFeature = buildDirectionsRouteFeature({
+        request, provider: 'radar', routeIndex: index, route, optimized: false,
+        geometry: { type: 'LineString', coordinates }, distanceMeters, durationSeconds,
+        legs: buildRouteLegMetrics(route, legMetrics, request.units),
+      });
+
+      await appendDirectionsRouteFeatures(features, routeFeature, request);
     }
 
     return { type: "FeatureCollection", features };
@@ -106,5 +119,4 @@ export class RadarRouteOverlayService implements RouteOverlayService {
   async getIsochroneOverlay(_request: IsochroneOverlayRequest): Promise<GeoJSON.FeatureCollection> {
     throw new Error("Radar does not offer an isochrone API");
   }
-
 }

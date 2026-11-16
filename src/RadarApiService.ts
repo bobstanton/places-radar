@@ -21,8 +21,10 @@ export default class RadarService implements IPlacesService {
       search: (searchQuery, proximity) => this.executeSearch(searchQuery, proximity),
       geocodeLocation: async (location) => {
         const locationResults = await this.executeSearch(location);
+
         if (locationResults.length === 0) return null;
         const { longitude, latitude } = locationResults[0];
+
         return { proximity: { latitude, longitude } };
       },
       combineFallbackQuery: (poi: string, location: string) => `${poi} ${location}`,
@@ -33,6 +35,7 @@ export default class RadarService implements IPlacesService {
   // Radar's autocomplete API has no bounding box filtering; this returns an empty array rather than out-of-bounds results.
   public lookupPlaceInBounds(_query: string, _bounds: PlacesBoundingBox): Promise<Place[]> {
     logger.scope('Places').debug('[Radar] lookupPlaceInBounds: API does not support bbox, returning empty results');
+
     return Promise.resolve([]);
   }
 
@@ -56,6 +59,7 @@ export default class RadarService implements IPlacesService {
       longitude: coordinate.longitude,
       layers: ["fine"] as RadarGeocodeLayer[]
     });
+
     return response.addresses.map(address => this.mapAddress(address));
   }
 
@@ -75,5 +79,4 @@ export default class RadarService implements IPlacesService {
       attribution: "© Radar © OpenStreetMap"
     };
   }
-
 }
